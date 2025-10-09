@@ -107,6 +107,21 @@ func GetTransactionByID(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
 		return
 	}
+
+	// Jika draft, hapus setelah dikirim ke frontend
+	if transaction.Status == "draft" {
+		// Kirim dulu data draft ke frontend
+		c.JSON(http.StatusOK, transaction)
+
+		// Setelah itu, hapus draft dari database
+		go func(id string) {
+			config.DB.Delete(&models.Transaction{}, id)
+		}(id)
+
+		return
+	}
+
+	// Kalau bukan draft (completed/refunded), kirim biasa
 	c.JSON(http.StatusOK, transaction)
 }
 

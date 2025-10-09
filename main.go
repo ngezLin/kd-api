@@ -10,7 +10,6 @@ import (
 
 	"kd-api/config"
 	"kd-api/routes"
-	"kd-api/seeders"
 )
 
 func main() {
@@ -37,7 +36,7 @@ func main() {
     routes.RegisterRoutes(r)
 
     // seed data
-    seeders.Seed()
+    // seeders.Seed()
 
     port := os.Getenv("PORT")
     if port == "" {
