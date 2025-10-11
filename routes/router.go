@@ -11,7 +11,7 @@ func RegisterRoutes(r *gin.Engine) {
 
 	r.POST("/login", controllers.Login)
 
-	// Public items (guest bisa lihat di landing page)
+	// Public items buat landing page
 	r.GET("/public/items", controllers.GetItems)
 	r.GET("/public/items/:id", controllers.GetItemByID)
 
