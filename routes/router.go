@@ -49,4 +49,21 @@ func RegisterRoutes(r *gin.Engine) {
 	{
 		dashboard.GET("/", controllers.GetDashboard)
 	}
+
+	// Attendance (admin only)
+	attendance := r.Group("/attendance")
+	attendance.Use(middlewares.AuthMiddleware(), middlewares.RoleMiddleware("admin"))
+	{
+		attendance.GET("/", controllers.GetAttendances)
+		attendance.POST("/", controllers.CreateAttendance)
+		attendance.GET("/today", controllers.GetTodayAttendance)
+		attendance.GET("/history", controllers.GetAttendanceHistory)
+	}
+
+	// Users (admin only)
+	users := r.Group("/users")
+	users.Use(middlewares.AuthMiddleware(), middlewares.RoleMiddleware("admin"))
+	{
+		users.GET("/", controllers.GetUsers)
+	}
 }

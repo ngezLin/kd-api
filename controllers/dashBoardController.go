@@ -5,11 +5,11 @@ import (
 	"kd-api/config"
 	"kd-api/models"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// Struct untuk response dashboard
 type DashboardTransactionItem struct {
 	ItemID   uint    `json:"item_id"`
 	Name     string  `json:"name"`
@@ -19,8 +19,8 @@ type DashboardTransactionItem struct {
 }
 
 type DashboardTransaction struct {
-	ID     uint                     `json:"id"`
-	Status string                   `json:"status"`
+	ID     uint                      `json:"id"`
+	Status string                    `json:"status"`
 	Items  []DashboardTransactionItem `json:"items"`
 }
 
@@ -38,6 +38,7 @@ func GetDashboard(c *gin.Context) {
 	var totalRefunded int64
 	var totalOmzet float64
 	var totalProfit float64
+	var todayProfit float64
 
 	// Count items
 	config.DB.Model(&models.Item{}).Count(&totalItems)
@@ -48,13 +49,26 @@ func GetDashboard(c *gin.Context) {
 	config.DB.Model(&models.Transaction{}).Where("status = ?", "completed").Count(&totalCompleted)
 	config.DB.Model(&models.Transaction{}).Where("status = ?", "refunded").Count(&totalRefunded)
 
-	// Sum omzet dan profit from completed transactions
+	// Sum omzet dan profit dari completed transactions
 	var completedTransactions []models.Transaction
 	config.DB.Preload("Items.Item").Where("status = ?", "completed").Find(&completedTransactions)
 	for _, t := range completedTransactions {
 		for _, ti := range t.Items {
 			totalOmzet += ti.Subtotal
 			totalProfit += float64(ti.Quantity) * (ti.Price - ti.Item.BuyPrice)
+		}
+	}
+
+	// 💰 Hitung profit hari ini
+	today := time.Now().Format("2006-01-02")
+	var todayTransactions []models.Transaction
+	config.DB.Preload("Items.Item").
+		Where("status = ? AND DATE(created_at) = ?", "completed", today).
+		Find(&todayTransactions)
+
+	for _, t := range todayTransactions {
+		for _, ti := range t.Items {
+			todayProfit += float64(ti.Quantity) * (ti.Price - ti.Item.BuyPrice)
 		}
 	}
 
@@ -117,6 +131,7 @@ func GetDashboard(c *gin.Context) {
 		"refunded":            totalRefunded,
 		"total_omzet":         totalOmzet,
 		"total_profit":        totalProfit,
+		"today_profit":        todayProfit, 
 		"low_stock":           lowStock,
 		"recent_transactions": recentResp,
 		"top_selling_items":   topItems,

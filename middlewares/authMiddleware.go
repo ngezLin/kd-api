@@ -12,6 +12,12 @@ import (
 // AuthMiddleware untuk memeriksa JWT
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Allow OPTIONS requests to pass through without authentication
+		if c.Request.Method == "OPTIONS" {
+			c.Next()
+			return
+		}
+
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
@@ -38,6 +44,12 @@ func AuthMiddleware() gin.HandlerFunc {
 // RoleMiddleware untuk role-based access (admin/cashier)
 func RoleMiddleware(allowedRoles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Allow OPTIONS requests to pass through
+		if c.Request.Method == "OPTIONS" {
+			c.Next()
+			return
+		}
+
 		role, exists := c.Get("role")
 		if !exists {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Role not found"})
