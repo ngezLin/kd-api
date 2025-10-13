@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Admin: Tambah absensi manual
+// tambah absensi manual
 func CreateAttendance(c *gin.Context) {
     var input struct {
         UserID uint   `json:"user_id" binding:"required"`
@@ -24,7 +24,7 @@ func CreateAttendance(c *gin.Context) {
 
     today := time.Now().Truncate(24 * time.Hour)
 
-    // ✅ Cek apakah user sudah diabsen hari ini
+    // cek absensi hari ini
     var existing models.Attendance
     if err := config.DB.Where("user_id = ? AND date = ?", input.UserID, today).First(&existing).Error; err == nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": "Cashier sudah diabsen hari ini"})

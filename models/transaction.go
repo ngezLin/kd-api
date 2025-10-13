@@ -15,6 +15,8 @@ type Transaction struct {
     PaymentType *string           `gorm:"type:enum('cash','qris','debit','credit')" json:"payment_type,omitempty"`
     Items       []TransactionItem `json:"items"`
     Note        *string           `gorm:"type:text" json:"note,omitempty"`
+    TransactionType string        `gorm:"type:enum('onsite','deliver');default:'onsite'" json:"transaction_type"`
+
 
     CreatedAt   time.Time         `gorm:"autoCreateTime" json:"created_at"`
     UpdatedAt   time.Time         `gorm:"autoUpdateTime" json:"updated_at"`

@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"fmt"
 	"kd-api/config"
 	"kd-api/models"
 	"net/http"
@@ -39,6 +38,8 @@ func GetDashboard(c *gin.Context) {
 	var totalOmzet float64
 	var totalProfit float64
 	var todayProfit float64
+	var todayTransactions int64
+	var todayDelivery int64
 
 	// Count items
 	config.DB.Model(&models.Item{}).Count(&totalItems)
@@ -59,18 +60,28 @@ func GetDashboard(c *gin.Context) {
 		}
 	}
 
-	// 💰 Hitung profit hari ini
+	//  Hitung profit hari ini
 	today := time.Now().Format("2006-01-02")
-	var todayTransactions []models.Transaction
+	var todayTransactionsData []models.Transaction
 	config.DB.Preload("Items.Item").
 		Where("status = ? AND DATE(created_at) = ?", "completed", today).
-		Find(&todayTransactions)
+		Find(&todayTransactionsData)
 
-	for _, t := range todayTransactions {
+	for _, t := range todayTransactionsData {
 		for _, ti := range t.Items {
 			todayProfit += float64(ti.Quantity) * (ti.Price - ti.Item.BuyPrice)
 		}
 	}
+
+	// Hitung jumlah transaksi completed hari ini
+	config.DB.Model(&models.Transaction{}).
+		Where("status = ? AND DATE(created_at) = ?", "completed", today).
+		Count(&todayTransactions)
+
+	// Hitung jumlah transaksi delivery hari ini (completed)
+	config.DB.Model(&models.Transaction{}).
+		Where("status = ? AND transaction_type = ? AND DATE(created_at) = ?", "completed", "deliver", today).
+		Count(&todayDelivery)
 
 	// Low stock count
 	var lowStock int64
@@ -99,8 +110,6 @@ func GetDashboard(c *gin.Context) {
 		})
 	}
 
-	fmt.Println("Recent transactions count:", len(recentResp))
-
 	// Top selling items (top 5 berdasarkan total quantity terjual)
 	var topItems []TopItem
 	config.DB.Model(&models.TransactionItem{}).
@@ -112,7 +121,6 @@ func GetDashboard(c *gin.Context) {
 		Limit(5).
 		Scan(&topItems)
 
-	// Ambil nama item
 	for i, ti := range topItems {
 		var item models.Item
 		if err := config.DB.First(&item, ti.ItemID).Error; err == nil {
@@ -120,20 +128,20 @@ func GetDashboard(c *gin.Context) {
 		}
 	}
 
-	fmt.Println("Top items count:", len(topItems))
-
 	// Kirim response JSON
 	c.JSON(http.StatusOK, gin.H{
-		"total_items":         totalItems,
-		"total_transactions":  totalTransactions,
-		"draft":               totalDraft,
-		"completed":           totalCompleted,
-		"refunded":            totalRefunded,
-		"total_omzet":         totalOmzet,
-		"total_profit":        totalProfit,
-		"today_profit":        todayProfit, 
-		"low_stock":           lowStock,
-		"recent_transactions": recentResp,
-		"top_selling_items":   topItems,
+		"total_items":          totalItems,
+		"total_transactions":   totalTransactions,
+		"draft":                totalDraft,
+		"completed":            totalCompleted,
+		"refunded":             totalRefunded,
+		"total_omzet":          totalOmzet,
+		"total_profit":         totalProfit,
+		"today_profit":         todayProfit,
+		"today_transactions":   todayTransactions,
+		"today_delivery":       todayDelivery,
+		"low_stock":            lowStock,
+		"recent_transactions":  recentResp,
+		"top_selling_items":    topItems,
 	})
 }

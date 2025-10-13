@@ -12,11 +12,12 @@ import (
 // Create new transaction (draft / completed)
 func CreateTransaction(c *gin.Context) {
 	var input struct {
-		Status        string   `json:"status"` // draft or completed
-		PaymentAmount *float64 `json:"paymentAmount,omitempty"`
-		PaymentType   *string  `json:"paymentType,omitempty"` // new field
-		Note          *string  `json:"note,omitempty"`        // new field
-		Items         []struct {
+		Status          string   `json:"status"` 
+		PaymentAmount   *float64 `json:"paymentAmount,omitempty"`
+		PaymentType     *string  `json:"paymentType,omitempty"`
+		Note            *string  `json:"note,omitempty"`
+		TransactionType *string  `json:"transaction_type,omitempty"` 
+		Items           []struct {
 			ItemID   uint `json:"item_id"`
 			Quantity int  `json:"quantity"`
 		} `json:"items"`
@@ -49,10 +50,16 @@ func CreateTransaction(c *gin.Context) {
 	}
 
 	transaction := models.Transaction{
-		Status: input.Status,
-		Total:  total,
-		Items:  transactionItems,
-		Note:   input.Note, // simpan note
+		Status:          input.Status,
+		Total:           total,
+		Items:           transactionItems,
+		Note:            input.Note,
+		TransactionType: "onsite", // default
+	}
+
+	// Jika ada TransactionType dari input, pakai itu
+	if input.TransactionType != nil {
+		transaction.TransactionType = *input.TransactionType
 	}
 
 	// Jika completed, hitung change dan validasi payment
@@ -110,22 +117,17 @@ func GetTransactionByID(c *gin.Context) {
 
 	// Jika draft, hapus setelah dikirim ke frontend
 	if transaction.Status == "draft" {
-		// Kirim dulu data draft ke frontend
 		c.JSON(http.StatusOK, transaction)
-
-		// Setelah itu, hapus draft dari database
 		go func(id string) {
 			config.DB.Delete(&models.Transaction{}, id)
 		}(id)
-
 		return
 	}
 
-	// Kalau bukan draft (completed/refunded), kirim biasa
 	c.JSON(http.StatusOK, transaction)
 }
 
-// Update status (draft -> completed) + optional note
+// Update status, note, dan transaction type
 func UpdateTransactionStatus(c *gin.Context) {
 	id := c.Param("id")
 	var transaction models.Transaction
@@ -135,9 +137,11 @@ func UpdateTransactionStatus(c *gin.Context) {
 	}
 
 	var input struct {
-		Status string  `json:"status"`
-		Note   *string `json:"note,omitempty"` // optional update note
+		Status          string  `json:"status"`
+		Note            *string `json:"note,omitempty"`
+		TransactionType *string `json:"transaction_type,omitempty"`
 	}
+
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -146,6 +150,9 @@ func UpdateTransactionStatus(c *gin.Context) {
 	transaction.Status = input.Status
 	if input.Note != nil {
 		transaction.Note = input.Note
+	}
+	if input.TransactionType != nil {
+		transaction.TransactionType = *input.TransactionType
 	}
 
 	if err := config.DB.Save(&transaction).Error; err != nil {
@@ -172,6 +179,16 @@ func GetTransactionHistory(c *gin.Context) {
 func CheckoutTransaction(c *gin.Context) {
 	id := c.Param("id")
 
+	var input struct {
+		TransactionType *string  `json:"transaction_type,omitempty"`
+		PaymentAmount   *float64 `json:"paymentAmount,omitempty"`
+		PaymentType     *string  `json:"paymentType,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	var transaction models.Transaction
 	if err := config.DB.Preload("Items.Item").First(&transaction, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
@@ -192,6 +209,21 @@ func CheckoutTransaction(c *gin.Context) {
 	}
 
 	transaction.Status = "completed"
+
+	if input.PaymentAmount != nil {
+		transaction.Payment = input.PaymentAmount
+		change := *input.PaymentAmount - transaction.Total
+		transaction.Change = &change
+	}
+
+	if input.PaymentType != nil {
+		transaction.PaymentType = input.PaymentType
+	}
+
+	if input.TransactionType != nil {
+		transaction.TransactionType = *input.TransactionType
+	}
+
 	if err := config.DB.Save(&transaction).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
