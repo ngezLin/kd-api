@@ -16,6 +16,16 @@ func ptrString(s string) *string {
 func Seed() {
 	rand.Seed(time.Now().UnixNano())
 
+	// ============= Seed Users =============
+	users := []models.User{
+		{Username: "admin", Password: "admin123", Role: "admin"},
+		{Username: "cashier1", Password: "cashier123", Role: "cashier"},
+	}
+
+	for _, user := range users {
+		config.DB.FirstOrCreate(&user, models.User{Username: user.Username})
+	}
+
 	// ============= Seed Items =============
 	items := []models.Item{
 		{Name: "Indomie Goreng", Description: ptrString("Mie instan rasa original"), Stock: 100, BuyPrice: 2000, Price: 3500, ImageURL: ptrString("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRj-aiL5r17BZ2D4HGnRec2dWmTtCrS3Q58yw&s")},
@@ -84,7 +94,7 @@ func Seed() {
 		config.DB.Create(&transaction)
 	}
 
-	// ============= Seed Transactions ============
+	// ============= Seed Transactions =============
 	for i := 0; i < 3; i++ {
 		createTransaction("draft")
 	}
@@ -95,5 +105,5 @@ func Seed() {
 		createTransaction("refunded")
 	}
 
-	fmt.Println("✅ Seeding selesai! 10 items + 9 transactions (3 draft, 3 completed, 3 refunded)")
+	fmt.Println("✅ Seeding selesai! 2 users + 10 items + 9 transactions (3 draft, 3 completed, 3 refunded)")
 }

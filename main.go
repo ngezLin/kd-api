@@ -27,7 +27,12 @@ func main() {
 
     // cors
     r.Use(cors.New(cors.Config{
-        AllowOrigins:     []string{"http://localhost:3000"},
+        AllowOrigins:     []string{
+            "http://202.10.41.223", 
+            "http://localhost:3000", 
+            "https://klampisdepo.cloud",
+            "https://kd-frontend.vercel.app",
+        },
         AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
         AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
         AllowCredentials: true,
