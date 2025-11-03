@@ -10,7 +10,6 @@ import (
 
 	"kd-api/config"
 	"kd-api/routes"
-	"kd-api/seeders"
 )
 
 func main() {
@@ -30,8 +29,7 @@ func main() {
         AllowOrigins:     []string{
             "http://202.10.41.223", 
             "http://localhost:3000", 
-            "https://klampisdepo.cloud",
-            "https://kd-frontend.vercel.app",
+            "https://klampisdepo.vercel.app",
         },
         AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
         AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
@@ -42,7 +40,7 @@ func main() {
     routes.RegisterRoutes(r)
 
     // seed data
-    seeders.Seed()
+    // seeders.Seed()
 
     port := os.Getenv("PORT")
     if port == "" {

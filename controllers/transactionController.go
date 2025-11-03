@@ -12,11 +12,12 @@ import (
 // Create new transaction (draft / completed)
 func CreateTransaction(c *gin.Context) {
 	var input struct {
-		Status          string   `json:"status"` 
+		Status          string   `json:"status"`
 		PaymentAmount   *float64 `json:"paymentAmount,omitempty"`
 		PaymentType     *string  `json:"paymentType,omitempty"`
 		Note            *string  `json:"note,omitempty"`
-		TransactionType *string  `json:"transaction_type,omitempty"` 
+		TransactionType *string  `json:"transaction_type,omitempty"`
+		Discount        *float64 `json:"discount,omitempty"`
 		Items           []struct {
 			ItemID   uint `json:"item_id"`
 			Quantity int  `json:"quantity"`
@@ -49,31 +50,45 @@ func CreateTransaction(c *gin.Context) {
 		})
 	}
 
+	// Apply discount
+	discount := 0.0
+	if input.Discount != nil {
+		discount = *input.Discount
+		if discount < 0 {
+			discount = 0
+		}
+	}
+	finalTotal := total - discount
+	if finalTotal < 0 {
+		finalTotal = 0
+	}
+
 	transaction := models.Transaction{
 		Status:          input.Status,
-		Total:           total,
+		Total:           finalTotal,
+		Discount:        discount,
 		Items:           transactionItems,
 		Note:            input.Note,
 		TransactionType: "onsite", // default
 	}
 
-	// Jika ada TransactionType dari input, pakai itu
+	// Use TransactionType from input if provided
 	if input.TransactionType != nil {
 		transaction.TransactionType = *input.TransactionType
 	}
 
-	// Jika completed, hitung change dan validasi payment
+	// If status is completed, validate payment and calculate change
 	if input.Status == "completed" {
-		if input.PaymentAmount == nil || *input.PaymentAmount < total {
+		if input.PaymentAmount == nil || *input.PaymentAmount < finalTotal {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Payment not enough"})
 			return
 		}
-		change := *input.PaymentAmount - total
+		change := *input.PaymentAmount - finalTotal
 		transaction.Payment = input.PaymentAmount
 		transaction.Change = &change
 		transaction.PaymentType = input.PaymentType
 
-		// Kurangi stock item
+		// Reduce stock
 		for _, tItem := range transaction.Items {
 			var item models.Item
 			if err := config.DB.First(&item, tItem.ItemID).Error; err == nil {
@@ -131,15 +146,16 @@ func GetTransactionByID(c *gin.Context) {
 func UpdateTransactionStatus(c *gin.Context) {
 	id := c.Param("id")
 	var transaction models.Transaction
-	if err := config.DB.First(&transaction, id).Error; err != nil {
+	if err := config.DB.Preload("Items").First(&transaction, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
 		return
 	}
 
 	var input struct {
-		Status          string  `json:"status"`
-		Note            *string `json:"note,omitempty"`
-		TransactionType *string `json:"transaction_type,omitempty"`
+		Status          string   `json:"status"`
+		Note            *string  `json:"note,omitempty"`
+		TransactionType *string  `json:"transaction_type,omitempty"`
+		Discount        *float64 `json:"discount,omitempty"` // new
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -155,6 +171,26 @@ func UpdateTransactionStatus(c *gin.Context) {
 		transaction.TransactionType = *input.TransactionType
 	}
 
+	// Apply discount if provided
+	if input.Discount != nil {
+		if *input.Discount < 0 {
+			transaction.Discount = 0
+		} else {
+			transaction.Discount = *input.Discount
+		}
+
+		// Recalculate total after discount
+		var total float64
+		for _, tItem := range transaction.Items {
+			total += tItem.Subtotal
+		}
+		finalTotal := total - transaction.Discount
+		if finalTotal < 0 {
+			finalTotal = 0
+		}
+		transaction.Total = finalTotal
+	}
+
 	if err := config.DB.Save(&transaction).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -162,6 +198,7 @@ func UpdateTransactionStatus(c *gin.Context) {
 
 	c.JSON(http.StatusOK, transaction)
 }
+
 
 // Get only completed + refunded transactions (history)
 func GetTransactionHistory(c *gin.Context) {
