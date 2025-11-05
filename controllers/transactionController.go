@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 
 	"kd-api/config"
@@ -19,90 +20,141 @@ func CreateTransaction(c *gin.Context) {
 		TransactionType *string  `json:"transaction_type,omitempty"`
 		Discount        *float64 `json:"discount,omitempty"`
 		Items           []struct {
-			ItemID   uint `json:"item_id"`
-			Quantity int  `json:"quantity"`
+			ItemID      uint     `json:"item_id"`
+			Quantity    int      `json:"quantity"`
+			CustomPrice *float64 `json:"customPrice,omitempty"`
 		} `json:"items"`
 	}
 
+	// Bind JSON
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	if len(input.Items) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No items provided"})
+		return
+	}
+
+	// Mulai transaksi DB
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
 
 	var total float64
 	var transactionItems []models.TransactionItem
 
 	for _, i := range input.Items {
 		var item models.Item
-		if err := config.DB.First(&item, i.ItemID).Error; err != nil {
+		if err := tx.First(&item, i.ItemID).Error; err != nil {
+			tx.Rollback()
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Item not found"})
 			return
 		}
 
-		subtotal := float64(i.Quantity) * item.Price
+		// Validasi jumlah
+		if i.Quantity <= 0 {
+			tx.Rollback()
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid quantity for item %d", i.ItemID)})
+			return
+		}
+
+		// Tentukan harga: pakai customPrice jika dikirim
+		price := item.Price
+		if i.CustomPrice != nil && *i.CustomPrice >= 0 {
+			price = *i.CustomPrice
+		}
+
+		subtotal := float64(i.Quantity) * price
 		total += subtotal
 
 		transactionItems = append(transactionItems, models.TransactionItem{
 			ItemID:   i.ItemID,
 			Quantity: i.Quantity,
-			Price:    item.Price,
+			Price:    price,
 			Subtotal: subtotal,
 		})
 	}
 
-	// Apply discount
+	// Diskon
 	discount := 0.0
-	if input.Discount != nil {
+	if input.Discount != nil && *input.Discount > 0 {
 		discount = *input.Discount
-		if discount < 0 {
-			discount = 0
-		}
 	}
 	finalTotal := total - discount
 	if finalTotal < 0 {
 		finalTotal = 0
 	}
 
+	// Buat transaksi
 	transaction := models.Transaction{
 		Status:          input.Status,
 		Total:           finalTotal,
 		Discount:        discount,
 		Items:           transactionItems,
 		Note:            input.Note,
-		TransactionType: "onsite", // default
+		TransactionType: "onsite",
 	}
 
-	// Use TransactionType from input if provided
 	if input.TransactionType != nil {
 		transaction.TransactionType = *input.TransactionType
 	}
 
-	// If status is completed, validate payment and calculate change
+	// Kalau status completed, wajib bayar cukup
 	if input.Status == "completed" {
 		if input.PaymentAmount == nil || *input.PaymentAmount < finalTotal {
+			tx.Rollback()
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Payment not enough"})
 			return
 		}
+
 		change := *input.PaymentAmount - finalTotal
 		transaction.Payment = input.PaymentAmount
 		transaction.Change = &change
 		transaction.PaymentType = input.PaymentType
 
-		// Reduce stock
-		for _, tItem := range transaction.Items {
+		// Kurangi stok
+		for _, tItem := range transactionItems {
 			var item models.Item
-			if err := config.DB.First(&item, tItem.ItemID).Error; err == nil {
-				item.Stock -= tItem.Quantity
-				config.DB.Save(&item)
+			if err := tx.First(&item, tItem.ItemID).Error; err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Item %d not found", tItem.ItemID)})
+				return
+			}
+
+			if item.Stock < tItem.Quantity {
+				tx.Rollback()
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Insufficient stock for item %d", tItem.ItemID)})
+				return
+			}
+
+			item.Stock -= tItem.Quantity
+			if err := tx.Save(&item).Error; err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
 			}
 		}
 	}
 
-	if err := config.DB.Create(&transaction).Error; err != nil {
+	// Simpan transaksi
+	if err := tx.Create(&transaction).Error; err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	// Commit
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Preload items setelah commit
 	if err := config.DB.Preload("Items.Item").First(&transaction, transaction.ID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -155,7 +207,7 @@ func UpdateTransactionStatus(c *gin.Context) {
 		Status          string   `json:"status"`
 		Note            *string  `json:"note,omitempty"`
 		TransactionType *string  `json:"transaction_type,omitempty"`
-		Discount        *float64 `json:"discount,omitempty"` // new
+		Discount        *float64 `json:"discount,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -198,7 +250,6 @@ func UpdateTransactionStatus(c *gin.Context) {
 
 	c.JSON(http.StatusOK, transaction)
 }
-
 
 // Get only completed + refunded transactions (history)
 func GetTransactionHistory(c *gin.Context) {
