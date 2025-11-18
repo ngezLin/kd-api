@@ -167,39 +167,6 @@ func CreateTransaction(c *gin.Context) {
 	c.JSON(http.StatusCreated, response)
 }
 
-
-
-// Get all transactions
-func GetTransactions(c *gin.Context) {
-	var transactions []models.Transaction
-	if err := config.DB.Preload("Items.Item").Find(&transactions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, transactions)
-}
-
-// Get transaction by ID
-func GetTransactionByID(c *gin.Context) {
-	id := c.Param("id")
-	var transaction models.Transaction
-	if err := config.DB.Preload("Items.Item").First(&transaction, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
-		return
-	}
-
-	// Jika draft, hapus setelah dikirim ke frontend
-	if transaction.Status == "draft" {
-		c.JSON(http.StatusOK, transaction)
-		go func(id string) {
-			config.DB.Delete(&models.Transaction{}, id)
-		}(id)
-		return
-	}
-
-	c.JSON(http.StatusOK, transaction)
-}
-
 // Update status, note, dan transaction type
 func UpdateTransactionStatus(c *gin.Context) {
 	id := c.Param("id")
@@ -255,18 +222,6 @@ func UpdateTransactionStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, transaction)
-}
-
-// Get only completed + refunded transactions (history)
-func GetTransactionHistory(c *gin.Context) {
-	var transactions []models.Transaction
-	if err := config.DB.Preload("Items.Item").
-		Where("status IN ?", []string{"completed", "refunded"}).
-		Find(&transactions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, transactions)
 }
 
 // Checkout transaction (draft -> completed, reduce stock)
@@ -326,41 +281,6 @@ func CheckoutTransaction(c *gin.Context) {
 	c.JSON(http.StatusOK, transaction)
 }
 
-// Refund transaction (completed -> refunded, restore stock)
-func RefundTransaction(c *gin.Context) {
-	id := c.Param("id")
-
-	var transaction models.Transaction
-	if err := config.DB.Preload("Items.Item").First(&transaction, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
-		return
-	}
-
-	if transaction.Status != "completed" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only completed transactions can be refunded"})
-		return
-	}
-
-	for _, tItem := range transaction.Items {
-		var item models.Item
-		if err := config.DB.First(&item, tItem.ItemID).Error; err == nil {
-			item.Stock += tItem.Quantity
-			config.DB.Save(&item)
-		}
-	}
-
-	transaction.Status = "refunded"
-	transaction.Payment = nil
-	transaction.Change = nil
-
-	if err := config.DB.Save(&transaction).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, transaction)
-}
-
 // GET /transactions?status=draft
 func GetDraftTransactions(c *gin.Context) {
 	status := c.Query("status")
@@ -397,4 +317,25 @@ func DeleteTransaction(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Draft deleted"})
+}
+
+// Get transaction by ID
+func GetTransactionByID(c *gin.Context) {
+	id := c.Param("id")
+	var transaction models.Transaction
+	if err := config.DB.Preload("Items.Item").First(&transaction, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
+		return
+	}
+
+	// Jika draft, hapus setelah dikirim ke frontend
+	if transaction.Status == "draft" {
+		c.JSON(http.StatusOK, transaction)
+		go func(id string) {
+			config.DB.Delete(&models.Transaction{}, id)
+		}(id)
+		return
+	}
+
+	c.JSON(http.StatusOK, transaction)
 }
