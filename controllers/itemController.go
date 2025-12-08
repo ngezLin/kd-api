@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 
 	"kd-api/config"
 	"kd-api/models"
@@ -17,6 +19,15 @@ type ItemResponseCashier struct {
 	Stock       int     `json:"stock"`
 	Price       float64 `json:"price"`
 	ImageURL    *string `json:"image_url,omitempty"`
+}
+
+// Pagination response
+type PaginatedResponse struct {
+	Data       interface{} `json:"data"`
+	Page       int         `json:"page"`
+	PageSize   int         `json:"page_size"`
+	TotalItems int64       `json:"total_items"`
+	TotalPages int         `json:"total_pages"`
 }
 
 // Helper function to get user role from context
@@ -62,16 +73,125 @@ func filterItemForRole(item models.Item, role string) interface{} {
 	return item
 }
 
-// Get all items
+// Get all items with pagination
 func GetItems(c *gin.Context) {
+	// Get pagination parameters
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	// Validate pagination parameters
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+
 	var items []models.Item
-	if err := config.DB.Find(&items).Error; err != nil {
+	var totalItems int64
+
+	// Count total items
+	if err := config.DB.Model(&models.Item{}).Count(&totalItems).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	
+
+	// Calculate offset
+	offset := (page - 1) * pageSize
+
+	// Get paginated items
+	if err := config.DB.Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Calculate total pages
+	totalPages := int(totalItems) / pageSize
+	if int(totalItems)%pageSize != 0 {
+		totalPages++
+	}
+
 	role := getUserRole(c)
-	c.JSON(http.StatusOK, filterItemsForRole(items, role))
+	filteredItems := filterItemsForRole(items, role)
+
+	response := PaginatedResponse{
+		Data:       filteredItems,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalItems: totalItems,
+		TotalPages: totalPages,
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// Get items by name with pagination (supports fuzzy search)
+func GetItemsByName(c *gin.Context) {
+	name := c.Query("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Name parameter is required"})
+		return
+	}
+
+	// Get pagination parameters
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	// Validate pagination parameters
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+
+	var items []models.Item
+	var totalItems int64
+
+	// Build fuzzy search query
+	// Split search terms by whitespace and create LIKE conditions for each word
+	searchTerms := strings.Fields(strings.TrimSpace(strings.ToLower(name)))
+	
+	query := config.DB.Model(&models.Item{})
+	
+	// Each search term must appear somewhere in the name (case-insensitive)
+	for _, term := range searchTerms {
+		query = query.Where("LOWER(name) LIKE ?", "%"+term+"%")
+	}
+
+	// Count total items matching the search
+	if err := query.Count(&totalItems).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Calculate offset
+	offset := (page - 1) * pageSize
+
+	// Get paginated items
+	if err := query.Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Calculate total pages
+	totalPages := int(totalItems) / pageSize
+	if int(totalItems)%pageSize != 0 {
+		totalPages++
+	}
+
+	role := getUserRole(c)
+	filteredItems := filterItemsForRole(items, role)
+
+	response := PaginatedResponse{
+		Data:       filteredItems,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalItems: totalItems,
+		TotalPages: totalPages,
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // Get item by ID

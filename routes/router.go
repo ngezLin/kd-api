@@ -13,13 +13,15 @@ func RegisterRoutes(r *gin.Engine) {
 
 	// Public items buat landing page
 	r.GET("/public/items", controllers.GetItems)
+	r.GET("/public/items/search", controllers.GetItemsByName)
 	r.GET("/public/items/:id", controllers.GetItemByID)
 
 	// Items 
 	items := r.Group("/items")
 	items.Use(middlewares.AuthMiddleware())
 	{
-		items.GET("/", controllers.GetItems)          
+		items.GET("/", controllers.GetItems)
+		items.GET("/search", controllers.GetItemsByName)
 		items.GET("/:id", controllers.GetItemByID)     
 		items.POST("/", middlewares.RoleMiddleware("admin", "cashier"), controllers.CreateItem)
 		items.PUT("/:id", middlewares.RoleMiddleware("admin", "cashier"), controllers.UpdateItem)
