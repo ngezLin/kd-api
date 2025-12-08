@@ -36,6 +36,7 @@ func RegisterRoutes(r *gin.Engine) {
 		transactions.GET("/history", controllers.GetTransactionHistory)
 		transactions.GET("/:id", controllers.GetTransactionByID)
 		transactions.PATCH("/:id", controllers.UpdateTransactionStatus)
+		transactions.GET("/history/by-date", controllers.GetTransactionHistoryByDate)
 
 		transactions.POST("/:id/refund", controllers.RefundTransaction)
 		transactions.GET("/drafts", controllers.GetDraftTransactions)

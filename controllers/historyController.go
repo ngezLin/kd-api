@@ -145,3 +145,66 @@ func RefundTransaction(c *gin.Context) {
 
 	c.JSON(http.StatusOK, transaction)
 }
+
+func GetTransactionHistoryByDate(c *gin.Context) {
+    pageStr := c.DefaultQuery("page", "1")
+    limitStr := c.DefaultQuery("limit", "10")
+    filterDate := c.Query("date") // tanggal wajib
+
+    if filterDate == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "date query param is required (format: YYYY-MM-DD)"})
+        return
+    }
+
+    // parse date
+    start, err := time.Parse("2006-01-02", filterDate)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid date format, use YYYY-MM-DD"})
+        return
+    }
+    end := start.Add(24 * time.Hour)
+
+    page, _ := strconv.Atoi(pageStr)
+    limit, _ := strconv.Atoi(limitStr)
+
+    if page < 1 {
+        page = 1
+    }
+    if limit < 1 {
+        limit = 10
+    }
+
+    offset := (page - 1) * limit
+
+    var transactions []models.Transaction
+    var total int64
+
+    db := config.DB.Model(&models.Transaction{}).
+        Where("status IN ?", []string{"completed", "refunded"}).
+        Where("created_at >= ? AND created_at < ?", start, end)
+
+    // count
+    if err := db.Count(&total).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+
+    // fetch
+    if err := db.Preload("Items.Item").
+        Order("created_at DESC").
+        Limit(limit).
+        Offset(offset).
+        Find(&transactions).Error; err != nil {
+
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "data":       transactions,
+        "page":       page,
+        "limit":      limit,
+        "total":      total,
+        "totalPages": int((total + int64(limit) - 1) / int64(limit)),
+    })
+}
