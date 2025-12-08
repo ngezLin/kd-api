@@ -1,6 +1,9 @@
 package controllers
 
 import (
+	"bytes"
+	"encoding/csv"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -317,4 +320,64 @@ func BulkCreateItems(c *gin.Context) {
 
 	role := getUserRole(c)
 	c.JSON(http.StatusCreated, filterItemsForRole(inputs, role))
+}
+
+func ExportItems(c *gin.Context) {
+	var items []models.Item
+
+	if err := config.DB.Find(&items).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	role := getUserRole(c)
+
+	var buffer bytes.Buffer
+	writer := csv.NewWriter(&buffer)
+
+	// Header CSV
+
+	writer.Write([]string{
+		"id", "name", "description", "stock", "buy_price", "price", "image_url",
+	})
+
+	// Rows
+	for _, item := range items {
+		desc := ""
+		img := ""
+
+		if item.Description != nil {
+			desc = *item.Description
+		}
+		if item.ImageURL != nil {
+			img = *item.ImageURL
+		}
+
+		if role == "cashier" {
+			writer.Write([]string{
+				fmt.Sprintf("%d", item.ID),
+				item.Name,
+				desc,
+				fmt.Sprintf("%d", item.Stock),
+				fmt.Sprintf("%.2f", item.Price),
+				img,
+			})
+		} else {
+			writer.Write([]string{
+				fmt.Sprintf("%d", item.ID),
+				item.Name,
+				desc,
+				fmt.Sprintf("%d", item.Stock),
+				fmt.Sprintf("%.2f", item.BuyPrice),
+				fmt.Sprintf("%.2f", item.Price),
+				img,
+			})
+		}
+	}
+
+	writer.Flush()
+
+	c.Header("Content-Description", "File Transfer")
+	c.Header("Content-Disposition", `attachment; filename="items.csv"`)
+	c.Data(http.StatusOK, "text/csv", buffer.Bytes())
 }

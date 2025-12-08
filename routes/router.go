@@ -27,6 +27,7 @@ func RegisterRoutes(r *gin.Engine) {
 		items.PUT("/:id", middlewares.RoleMiddleware("admin", "cashier"), controllers.UpdateItem)
 		items.DELETE("/:id", middlewares.RoleMiddleware("admin", "cashier"), controllers.DeleteItem)
 		items.POST("/bulk", middlewares.RoleMiddleware("admin", "cashier"), controllers.BulkCreateItems)
+		items.GET("/export/csv", middlewares.RoleMiddleware("admin", "cashier"), controllers.ExportItems)
 	}
 
 	// Transactions
