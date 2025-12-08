@@ -37,7 +37,6 @@ func RegisterRoutes(r *gin.Engine) {
 		transactions.GET("/:id", controllers.GetTransactionByID)
 		transactions.PATCH("/:id", controllers.UpdateTransactionStatus)
 
-		transactions.POST("/:id/checkout", controllers.CheckoutTransaction)
 		transactions.POST("/:id/refund", controllers.RefundTransaction)
 		transactions.GET("/drafts", controllers.GetDraftTransactions)
 		transactions.DELETE("/:id", controllers.DeleteTransaction)

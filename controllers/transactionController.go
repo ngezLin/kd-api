@@ -245,62 +245,6 @@ func UpdateTransactionStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, transaction)
 }
 
-// Checkout transaction (draft -> completed, reduce stock)
-func CheckoutTransaction(c *gin.Context) {
-	id := c.Param("id")
-
-	var input struct {
-		TransactionType *string  `json:"transaction_type,omitempty"`
-		PaymentAmount   *float64 `json:"paymentAmount,omitempty"`
-		PaymentType     *string  `json:"paymentType,omitempty"`
-	}
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var transaction models.Transaction
-	if err := config.DB.Preload("Items.Item").First(&transaction, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
-		return
-	}
-
-	if transaction.Status != "draft" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only draft transactions can be checked out"})
-		return
-	}
-
-	for _, tItem := range transaction.Items {
-		var item models.Item
-		if err := config.DB.First(&item, tItem.ItemID).Error; err == nil {
-			item.Stock -= tItem.Quantity
-			config.DB.Save(&item)
-		}
-	}
-
-	transaction.Status = "completed"
-
-	if input.PaymentAmount != nil {
-		transaction.Payment = input.PaymentAmount
-		change := *input.PaymentAmount - transaction.Total
-		transaction.Change = &change
-	}
-
-	if input.PaymentType != nil {
-		transaction.PaymentType = input.PaymentType
-	}
-
-	if input.TransactionType != nil {
-		transaction.TransactionType = *input.TransactionType
-	}
-
-	if err := config.DB.Save(&transaction).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, transaction)
-}
 
 // GET /transactions?status=draft
 func GetDraftTransactions(c *gin.Context) {

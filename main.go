@@ -29,7 +29,7 @@ func main() {
         AllowOrigins:     []string{
             "http://202.10.41.223", 
             "http://localhost:3000", 
-            "https://klampisdepo.vercel.app",
+            "https://klampisdepo.com",
         },
         AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
         AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
