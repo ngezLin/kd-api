@@ -18,8 +18,8 @@ type DashboardTransactionItem struct {
 }
 
 type DashboardTransaction struct {
-	ID     uint                      `json:"id"`
-	Status string                    `json:"status"`
+	ID     uint                       `json:"id"`
+	Status string                     `json:"status"`
 	Items  []DashboardTransactionItem `json:"items"`
 }
 
@@ -30,39 +30,13 @@ type TopItem struct {
 }
 
 func GetDashboard(c *gin.Context) {
-	var totalItems int64
-	var totalTransactions int64
-	var totalDraft int64
-	var totalCompleted int64
-	var totalRefunded int64
-	var totalOmzet float64
-	var totalProfit float64
 	var todayProfit float64
 	var todayTransactions int64
-	var todayDelivery int64
 
-	// Count items
-	config.DB.Model(&models.Item{}).Count(&totalItems)
-
-	// Count transactions
-	config.DB.Model(&models.Transaction{}).Count(&totalTransactions)
-	config.DB.Model(&models.Transaction{}).Where("status = ?", "draft").Count(&totalDraft)
-	config.DB.Model(&models.Transaction{}).Where("status = ?", "completed").Count(&totalCompleted)
-	config.DB.Model(&models.Transaction{}).Where("status = ?", "refunded").Count(&totalRefunded)
-
-	// Sum omzet dan profit dari completed transactions
-	var completedTransactions []models.Transaction
-	config.DB.Preload("Items.Item").Where("status = ?", "completed").Find(&completedTransactions)
-	for _, t := range completedTransactions {
-		for _, ti := range t.Items {
-			totalOmzet += ti.Subtotal
-			totalProfit += float64(ti.Quantity) * (ti.Price - ti.Item.BuyPrice)
-		}
-	}
-
-	//  Hitung profit hari ini
+	// Hitung profit hari ini
 	today := time.Now().Format("2006-01-02")
 	var todayTransactionsData []models.Transaction
+
 	config.DB.Preload("Items.Item").
 		Where("status = ? AND DATE(created_at) = ?", "completed", today).
 		Find(&todayTransactionsData)
@@ -73,44 +47,17 @@ func GetDashboard(c *gin.Context) {
 		}
 	}
 
-	// Hitung jumlah transaksi completed hari ini
+	// Hitung jumlah transaksi hari ini
 	config.DB.Model(&models.Transaction{}).
 		Where("status = ? AND DATE(created_at) = ?", "completed", today).
 		Count(&todayTransactions)
 
-	// Hitung jumlah transaksi delivery hari ini (completed)
-	config.DB.Model(&models.Transaction{}).
-		Where("status = ? AND transaction_type = ? AND DATE(created_at) = ?", "completed", "deliver", today).
-		Count(&todayDelivery)
 
-	// Low stock count
+	// Low stock count (<5)
 	var lowStock int64
 	config.DB.Model(&models.Item{}).Where("stock < ?", 5).Count(&lowStock)
 
-	// Recent transactions (3 terakhir)
-	var recentTransactions []models.Transaction
-	config.DB.Preload("Items.Item").Order("created_at desc").Limit(3).Find(&recentTransactions)
-
-	var recentResp []DashboardTransaction
-	for _, t := range recentTransactions {
-		var items []DashboardTransactionItem
-		for _, ti := range t.Items {
-			items = append(items, DashboardTransactionItem{
-				ItemID:   ti.ItemID,
-				Name:     ti.Item.Name,
-				Quantity: ti.Quantity,
-				Price:    ti.Price,
-				Subtotal: ti.Subtotal,
-			})
-		}
-		recentResp = append(recentResp, DashboardTransaction{
-			ID:     t.ID,
-			Status: t.Status,
-			Items:  items,
-		})
-	}
-
-	// Top selling items (top 5 berdasarkan total quantity terjual)
+	// Top selling items (top 5)
 	var topItems []TopItem
 	config.DB.Model(&models.TransactionItem{}).
 		Select("item_id, SUM(quantity) as quantity").
@@ -130,18 +77,9 @@ func GetDashboard(c *gin.Context) {
 
 	// Kirim response JSON
 	c.JSON(http.StatusOK, gin.H{
-		"total_items":          totalItems,
-		"total_transactions":   totalTransactions,
-		"draft":                totalDraft,
-		"completed":            totalCompleted,
-		"refunded":             totalRefunded,
-		"total_omzet":          totalOmzet,
-		"total_profit":         totalProfit,
-		"today_profit":         todayProfit,
-		"today_transactions":   todayTransactions,
-		"today_delivery":       todayDelivery,
-		"low_stock":            lowStock,
-		"recent_transactions":  recentResp,
-		"top_selling_items":    topItems,
+		"today_profit":        todayProfit,
+		"today_transactions":  todayTransactions,
+		"low_stock":           lowStock,
+		"top_selling_items":   topItems,
 	})
 }
