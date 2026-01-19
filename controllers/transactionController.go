@@ -6,7 +6,6 @@ import (
 
 	"kd-api/config"
 	"kd-api/models"
-	"kd-api/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -162,21 +161,7 @@ func CreateTransaction(c *gin.Context) {
 		return
 	}
 
-	// KIRIM NOTIFIKASI WHATSAPP (jangan blocking)
-	go func() {
-		message := utils.FormatTransactionMessage(
-			transaction.ID,
-			transaction.Status,
-			transaction.Total,
-			itemNames,
-		)
-		
-		err := utils.SendWhatsAppNotification("081357022138", message)
-		if err != nil {
-			// Log error tapi jangan ganggu response API
-			fmt.Printf("Failed to send WhatsApp notification: %v\n", err)
-		}
-	}()
+
 
 	response := gin.H{
 		"transaction": transaction,
