@@ -10,21 +10,11 @@ import (
 
 	"kd-api/config"
 	"kd-api/models"
+	"kd-api/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
-// ItemResponse for cashier (without BuyPrice)
-type ItemResponseCashier struct {
-	ID          uint    `json:"id"`
-	Name        string  `json:"name"`
-	Description *string `json:"description,omitempty"`
-	Stock       int     `json:"stock"`
-	Price       float64 `json:"price"`
-	ImageURL    *string `json:"image_url,omitempty"`
-}
-
-// Pagination response
 type PaginatedResponse struct {
 	Data       interface{} `json:"data"`
 	Page       int         `json:"page"`
@@ -33,102 +23,56 @@ type PaginatedResponse struct {
 	TotalPages int         `json:"total_pages"`
 }
 
-// Helper function to get user role from context
-func getUserRole(c *gin.Context) string {
-	role, exists := c.Get("role")
-	if !exists {
-		return ""
-	}
-	return role.(string)
-}
-
-// Helper function to filter items based on role
-func filterItemsForRole(items []models.Item, role string) interface{} {
-	if role == "cashier" {
-		cashierItems := make([]ItemResponseCashier, len(items))
-		for i, item := range items {
-			cashierItems[i] = ItemResponseCashier{
-				ID:          item.ID,
-				Name:        item.Name,
-				Description: item.Description,
-				Stock:       item.Stock,
-				Price:       item.Price,
-				ImageURL:    item.ImageURL,
-			}
-		}
-		return cashierItems
-	}
-	return items
-}
-
-// Helper function to filter single item based on role
-func filterItemForRole(item models.Item, role string) interface{} {
-	if role == "cashier" {
-		return ItemResponseCashier{
-			ID:          item.ID,
-			Name:        item.Name,
-			Description: item.Description,
-			Stock:       item.Stock,
-			Price:       item.Price,
-			ImageURL:    item.ImageURL,
-		}
-	}
-	return item
-}
-
-// Get all items with pagination
-func GetItems(c *gin.Context) {
-	// Get pagination parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-
-	// Validate pagination parameters
+// getPaginationParams extracts and validates pagination parameters
+func getPaginationParams(c *gin.Context) (page, pageSize int) {
+	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 10
 	}
+	return
+}
 
+// buildPaginatedResponse creates paginated response
+func buildPaginatedResponse(items []models.Item, page, pageSize int, total int64, role string) PaginatedResponse {
+	totalPages := int(total) / pageSize
+	if int(total)%pageSize != 0 {
+		totalPages++
+	}
+
+	return PaginatedResponse{
+		Data:       utils.FilterItemsForRole(items, role),
+		Page:       page,
+		PageSize:   pageSize,
+		TotalItems: total,
+		TotalPages: totalPages,
+	}
+}
+
+func GetItems(c *gin.Context) {
+	page, pageSize := getPaginationParams(c)
+	
 	var items []models.Item
-	var totalItems int64
+	var total int64
 
-	// Count total items
-	if err := config.DB.Model(&models.Item{}).Count(&totalItems).Error; err != nil {
+	if err := config.DB.Model(&models.Item{}).Count(&total).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Calculate offset
 	offset := (page - 1) * pageSize
-
-	// Get paginated items
 	if err := config.DB.Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Calculate total pages
-	totalPages := int(totalItems) / pageSize
-	if int(totalItems)%pageSize != 0 {
-		totalPages++
-	}
-
-	role := getUserRole(c)
-	filteredItems := filterItemsForRole(items, role)
-
-	response := PaginatedResponse{
-		Data:       filteredItems,
-		Page:       page,
-		PageSize:   pageSize,
-		TotalItems: totalItems,
-		TotalPages: totalPages,
-	}
-
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, buildPaginatedResponse(items, page, pageSize, total, utils.GetUserRole(c)))
 }
 
-// Get items by name with pagination (supports fuzzy search)
 func GetItemsByName(c *gin.Context) {
 	name := c.Query("name")
 	if name == "" {
@@ -136,81 +80,39 @@ func GetItemsByName(c *gin.Context) {
 		return
 	}
 
-	// Get pagination parameters
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-
-	// Validate pagination parameters
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 10
-	}
-
+	page, pageSize := getPaginationParams(c)
+	
 	var items []models.Item
-	var totalItems int64
+	var total int64
 
-	// Build fuzzy search query
-	// Split search terms by whitespace and create LIKE conditions for each word
-	searchTerms := strings.Fields(strings.TrimSpace(strings.ToLower(name)))
-	
 	query := config.DB.Model(&models.Item{})
-	
-	// Each search term must appear somewhere in the name (case-insensitive)
-	for _, term := range searchTerms {
+	for _, term := range strings.Fields(strings.ToLower(strings.TrimSpace(name))) {
 		query = query.Where("LOWER(name) LIKE ?", "%"+term+"%")
 	}
 
-	// Count total items matching the search
-	if err := query.Count(&totalItems).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Calculate offset
 	offset := (page - 1) * pageSize
-
-	// Get paginated items
 	if err := query.Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Calculate total pages
-	totalPages := int(totalItems) / pageSize
-	if int(totalItems)%pageSize != 0 {
-		totalPages++
-	}
-
-	role := getUserRole(c)
-	filteredItems := filterItemsForRole(items, role)
-
-	response := PaginatedResponse{
-		Data:       filteredItems,
-		Page:       page,
-		PageSize:   pageSize,
-		TotalItems: totalItems,
-		TotalPages: totalPages,
-	}
-
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, buildPaginatedResponse(items, page, pageSize, total, utils.GetUserRole(c)))
 }
 
-// Get item by ID
 func GetItemByID(c *gin.Context) {
-	id := c.Param("id")
 	var item models.Item
-	if err := config.DB.First(&item, id).Error; err != nil {
+	if err := config.DB.First(&item, c.Param("id")).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
 		return
 	}
-	
-	role := getUserRole(c)
-	c.JSON(http.StatusOK, filterItemForRole(item, role))
+	c.JSON(http.StatusOK, utils.FilterItemForRole(item, utils.GetUserRole(c)))
 }
 
-// Create new item
 func CreateItem(c *gin.Context) {
 	var input models.Item
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -218,35 +120,40 @@ func CreateItem(c *gin.Context) {
 		return
 	}
 
+	// Check for duplicate name
 	var existing models.Item
 	if err := config.DB.Where("name = ?", input.Name).First(&existing).Error; err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Item dengan nama ini sudah ada"})
 		return
 	}
 
-	item := models.Item{
-		Name:        input.Name,
-		Description: input.Description,
-		Stock:       input.Stock,
-		BuyPrice:    input.BuyPrice,
-		Price:       input.Price,
-		ImageURL:    input.ImageURL,
-	}
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
 
-	if err := config.DB.Create(&item).Error; err != nil {
+	if err := tx.Create(&input).Error; err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	role := getUserRole(c)
-	c.JSON(http.StatusCreated, filterItemForRole(item, role))
+	description := fmt.Sprintf("Item '%s' created", input.Name)
+	if err := utils.CreateItemAuditLog(tx, "create", input.ID, nil, &input, utils.GetUserID(c), c.ClientIP(), description); err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
+		return
+	}
+
+	tx.Commit()
+	c.JSON(http.StatusCreated, utils.FilterItemForRole(input, utils.GetUserRole(c)))
 }
 
-// Update item by ID
 func UpdateItem(c *gin.Context) {
-	id := c.Param("id")
-	var item models.Item
-	if err := config.DB.First(&item, id).Error; err != nil {
+	var oldItem models.Item
+	if err := config.DB.First(&oldItem, c.Param("id")).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
 		return
 	}
@@ -257,42 +164,75 @@ func UpdateItem(c *gin.Context) {
 		return
 	}
 
+	// Check for duplicate name (excluding current item)
 	var existing models.Item
-	if err := config.DB.Where("name = ? AND id != ?", input.Name, id).First(&existing).Error; err == nil {
+	if err := config.DB.Where("name = ? AND id != ?", input.Name, oldItem.ID).First(&existing).Error; err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Item dengan nama ini sudah ada"})
 		return
 	}
 
-	item.Name = input.Name
-	item.Description = input.Description
-	item.Stock = input.Stock
-	item.BuyPrice = input.BuyPrice
-	item.Price = input.Price
-	item.ImageURL = input.ImageURL
+	oldCopy := oldItem
+	oldItem.Name = input.Name
+	oldItem.Description = input.Description
+	oldItem.Stock = input.Stock
+	oldItem.BuyPrice = input.BuyPrice
+	oldItem.Price = input.Price
+	oldItem.ImageURL = input.ImageURL
 
-	if err := config.DB.Save(&item).Error; err != nil {
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := tx.Save(&oldItem).Error; err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	role := getUserRole(c)
-	c.JSON(http.StatusOK, filterItemForRole(item, role))
+	description := fmt.Sprintf("Item '%s' updated", oldItem.Name)
+	if err := utils.CreateItemAuditLog(tx, "update", oldItem.ID, &oldCopy, &oldItem, utils.GetUserID(c), c.ClientIP(), description); err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
+		return
+	}
+
+	tx.Commit()
+	c.JSON(http.StatusOK, utils.FilterItemForRole(oldItem, utils.GetUserRole(c)))
 }
 
-// Delete item by ID
 func DeleteItem(c *gin.Context) {
-	id := c.Param("id")
 	var item models.Item
-	if err := config.DB.First(&item, id).Error; err != nil {
+	if err := config.DB.First(&item, c.Param("id")).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
 		return
 	}
 
-	if err := config.DB.Delete(&item).Error; err != nil {
+	itemCopy := item
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := tx.Delete(&item).Error; err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	description := fmt.Sprintf("Item '%s' deleted", itemCopy.Name)
+	if err := utils.CreateItemAuditLog(tx, "delete", itemCopy.ID, &itemCopy, nil, utils.GetUserID(c), c.ClientIP(), description); err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
+		return
+	}
+
+	tx.Commit()
 	c.JSON(http.StatusOK, gin.H{"message": "Item deleted successfully"})
 }
 
@@ -303,8 +243,8 @@ func BulkCreateItems(c *gin.Context) {
 		return
 	}
 
+	// Clean empty strings
 	for i := range inputs {
-		// Konversi string kosong menjadi nil untuk pointer fields
 		if inputs[i].Description != nil && *inputs[i].Description == "" {
 			inputs[i].Description = nil
 		}
@@ -313,68 +253,50 @@ func BulkCreateItems(c *gin.Context) {
 		}
 	}
 
-	if err := config.DB.Create(&inputs).Error; err != nil {
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := tx.Create(&inputs).Error; err != nil {
+		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	role := getUserRole(c)
-	c.JSON(http.StatusCreated, filterItemsForRole(inputs, role))
+	userID := utils.GetUserID(c)
+	ipAddress := c.ClientIP()
+
+	for _, item := range inputs {
+		description := fmt.Sprintf("Item '%s' created via bulk import", item.Name)
+		if err := utils.CreateItemAuditLog(tx, "create", item.ID, nil, &item, userID, ipAddress, description); err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
+			return
+		}
+	}
+
+	tx.Commit()
+	c.JSON(http.StatusCreated, utils.FilterItemsForRole(inputs, utils.GetUserRole(c)))
 }
 
 func ExportItems(c *gin.Context) {
 	var items []models.Item
-
 	if err := config.DB.Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	role := getUserRole(c)
-
+	role := utils.GetUserRole(c)
 	var buffer bytes.Buffer
 	writer := csv.NewWriter(&buffer)
 
-	// Header CSV
-
-	writer.Write([]string{
-		"id", "name", "description", "stock", "buy_price", "price", "image_url",
-	})
-
-	// Rows
+	writer.Write(utils.GetCSVHeaders(role))
 	for _, item := range items {
-		desc := ""
-		img := ""
-
-		if item.Description != nil {
-			desc = *item.Description
-		}
-		if item.ImageURL != nil {
-			img = *item.ImageURL
-		}
-
-		if role == "cashier" {
-			writer.Write([]string{
-				fmt.Sprintf("%d", item.ID),
-				item.Name,
-				desc,
-				fmt.Sprintf("%d", item.Stock),
-				fmt.Sprintf("%.2f", item.Price),
-				img,
-			})
-		} else {
-			writer.Write([]string{
-				fmt.Sprintf("%d", item.ID),
-				item.Name,
-				desc,
-				fmt.Sprintf("%d", item.Stock),
-				fmt.Sprintf("%.2f", item.BuyPrice),
-				fmt.Sprintf("%.2f", item.Price),
-				img,
-			})
-		}
+		writer.Write(utils.FormatItemCSVRow(item, role))
 	}
-
 	writer.Flush()
 
 	c.Header("Content-Description", "File Transfer")

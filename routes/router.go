@@ -69,4 +69,11 @@ func RegisterRoutes(r *gin.Engine) {
 	{
 		users.GET("/", controllers.GetUsers)
 	}
+
+	// Audit logs (admin only)
+	audit := r.Group("/audit-logs")
+	audit.Use(middlewares.AuthMiddleware(), middlewares.RoleMiddleware("admin"))
+	{
+		audit.GET("/", controllers.GetAuditLogs)
+	}
 }

@@ -13,38 +13,34 @@ import (
 )
 
 func main() {
-    err := godotenv.Load()
-    if err != nil {
-        log.Fatal("Error loading .env file")
-    }
+	// Load env FIRST
+	if err := godotenv.Load(); err != nil {
+		log.Fatal("Error loading .env file")
+	}
 
-    // connect db
-    config.ConnectDatabase()
+	// Connect DB
+	config.ConnectDatabase()
 
-    // init router
-    r := gin.Default() // sudah ada Logger & Recovery
+	r := gin.Default()
 
-    // cors
-    r.Use(cors.New(cors.Config{
-        AllowOrigins:     []string{
-            "http://202.10.41.223", 
-            "http://localhost:3000", 
-            "https://klampisdepo.com",
-        },
-        AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
-        AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-        AllowCredentials: true,
-    }))
+	r.Use(cors.New(cors.Config{
+		AllowOrigins: []string{
+			"http://202.10.41.223",
+			"http://localhost:3000",
+			"https://klampisdepo.com",
+		},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowCredentials: true,
+	}))
 
-    // routes
-    routes.RegisterRoutes(r)
+	routes.RegisterRoutes(r)
 
-    // seed data
-    // seeders.Seed()
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
-    port := os.Getenv("PORT")
-    if port == "" {
-        port = "8080"
-    }
-    r.Run(":" + port)
+	log.Println("Server running on port", port)
+	r.Run(":" + port)
 }
