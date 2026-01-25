@@ -13,6 +13,7 @@ import (
 	"kd-api/utils"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type PaginatedResponse struct {
@@ -23,11 +24,10 @@ type PaginatedResponse struct {
 	TotalPages int         `json:"total_pages"`
 }
 
-// getPaginationParams extracts and validates pagination parameters
 func getPaginationParams(c *gin.Context) (page, pageSize int) {
 	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	
+
 	if page < 1 {
 		page = 1
 	}
@@ -37,7 +37,6 @@ func getPaginationParams(c *gin.Context) (page, pageSize int) {
 	return
 }
 
-// buildPaginatedResponse creates paginated response
 func buildPaginatedResponse(items []models.Item, page, pageSize int, total int64, role string) PaginatedResponse {
 	totalPages := int(total) / pageSize
 	if int(total)%pageSize != 0 {
@@ -55,7 +54,7 @@ func buildPaginatedResponse(items []models.Item, page, pageSize int, total int64
 
 func GetItems(c *gin.Context) {
 	page, pageSize := getPaginationParams(c)
-	
+
 	var items []models.Item
 	var total int64
 
@@ -81,7 +80,7 @@ func GetItemsByName(c *gin.Context) {
 	}
 
 	page, pageSize := getPaginationParams(c)
-	
+
 	var items []models.Item
 	var total int64
 
@@ -120,34 +119,35 @@ func CreateItem(c *gin.Context) {
 		return
 	}
 
-	// Check for duplicate name
 	var existing models.Item
 	if err := config.DB.Where("name = ?", input.Name).First(&existing).Error; err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Item dengan nama ini sudah ada"})
 		return
 	}
 
-	tx := config.DB.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
+	err := config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&input).Error; err != nil {
+			return err
 		}
-	}()
 
-	if err := tx.Create(&input).Error; err != nil {
-		tx.Rollback()
+		description := fmt.Sprintf("Item '%s' created", input.Name)
+		return utils.CreateItemAuditLog(
+			tx,
+			"create",
+			input.ID,
+			nil,
+			&input,
+			utils.GetUserID(c),
+			c.ClientIP(),
+			description,
+		)
+	})
+
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	description := fmt.Sprintf("Item '%s' created", input.Name)
-	if err := utils.CreateItemAuditLog(tx, "create", input.ID, nil, &input, utils.GetUserID(c), c.ClientIP(), description); err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
-		return
-	}
-
-	tx.Commit()
 	c.JSON(http.StatusCreated, utils.FilterItemForRole(input, utils.GetUserRole(c)))
 }
 
@@ -164,42 +164,45 @@ func UpdateItem(c *gin.Context) {
 		return
 	}
 
-	// Check for duplicate name (excluding current item)
 	var existing models.Item
-	if err := config.DB.Where("name = ? AND id != ?", input.Name, oldItem.ID).First(&existing).Error; err == nil {
+	if err := config.DB.Where("name = ? AND id != ?", input.Name, oldItem.ID).
+		First(&existing).Error; err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Item dengan nama ini sudah ada"})
 		return
 	}
 
 	oldCopy := oldItem
-	oldItem.Name = input.Name
-	oldItem.Description = input.Description
-	oldItem.Stock = input.Stock
-	oldItem.BuyPrice = input.BuyPrice
-	oldItem.Price = input.Price
-	oldItem.ImageURL = input.ImageURL
 
-	tx := config.DB.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
+	err := config.DB.Transaction(func(tx *gorm.DB) error {
+		oldItem.Name = input.Name
+		oldItem.Description = input.Description
+		oldItem.Stock = input.Stock
+		oldItem.BuyPrice = input.BuyPrice
+		oldItem.Price = input.Price
+		oldItem.ImageURL = input.ImageURL
+
+		if err := tx.Save(&oldItem).Error; err != nil {
+			return err
 		}
-	}()
 
-	if err := tx.Save(&oldItem).Error; err != nil {
-		tx.Rollback()
+		description := fmt.Sprintf("Item '%s' updated", oldItem.Name)
+		return utils.CreateItemAuditLog(
+			tx,
+			"update",
+			oldItem.ID,
+			&oldCopy,
+			&oldItem,
+			utils.GetUserID(c),
+			c.ClientIP(),
+			description,
+		)
+	})
+
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	description := fmt.Sprintf("Item '%s' updated", oldItem.Name)
-	if err := utils.CreateItemAuditLog(tx, "update", oldItem.ID, &oldCopy, &oldItem, utils.GetUserID(c), c.ClientIP(), description); err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
-		return
-	}
-
-	tx.Commit()
 	c.JSON(http.StatusOK, utils.FilterItemForRole(oldItem, utils.GetUserRole(c)))
 }
 
@@ -212,27 +215,29 @@ func DeleteItem(c *gin.Context) {
 
 	itemCopy := item
 
-	tx := config.DB.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
+	err := config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&item).Error; err != nil {
+			return err
 		}
-	}()
 
-	if err := tx.Delete(&item).Error; err != nil {
-		tx.Rollback()
+		description := fmt.Sprintf("Item '%s' deleted", itemCopy.Name)
+		return utils.CreateItemAuditLog(
+			tx,
+			"delete",
+			itemCopy.ID,
+			&itemCopy,
+			nil,
+			utils.GetUserID(c),
+			c.ClientIP(),
+			description,
+		)
+	})
+
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	description := fmt.Sprintf("Item '%s' deleted", itemCopy.Name)
-	if err := utils.CreateItemAuditLog(tx, "delete", itemCopy.ID, &itemCopy, nil, utils.GetUserID(c), c.ClientIP(), description); err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
-		return
-	}
-
-	tx.Commit()
 	c.JSON(http.StatusOK, gin.H{"message": "Item deleted successfully"})
 }
 
@@ -243,7 +248,6 @@ func BulkCreateItems(c *gin.Context) {
 		return
 	}
 
-	// Clean empty strings
 	for i := range inputs {
 		if inputs[i].Description != nil && *inputs[i].Description == "" {
 			inputs[i].Description = nil
@@ -253,32 +257,37 @@ func BulkCreateItems(c *gin.Context) {
 		}
 	}
 
-	tx := config.DB.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
+	userID := utils.GetUserID(c)
+	ipAddress := c.ClientIP()
 
-	if err := tx.Create(&inputs).Error; err != nil {
-		tx.Rollback()
+	err := config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&inputs).Error; err != nil {
+			return err
+		}
+
+		for _, item := range inputs {
+			description := fmt.Sprintf("Item '%s' created via bulk import", item.Name)
+			if err := utils.CreateItemAuditLog(
+				tx,
+				"create",
+				item.ID,
+				nil,
+				&item,
+				userID,
+				ipAddress,
+				description,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	userID := utils.GetUserID(c)
-	ipAddress := c.ClientIP()
-
-	for _, item := range inputs {
-		description := fmt.Sprintf("Item '%s' created via bulk import", item.Name)
-		if err := utils.CreateItemAuditLog(tx, "create", item.ID, nil, &item, userID, ipAddress, description); err != nil {
-			tx.Rollback()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
-			return
-		}
-	}
-
-	tx.Commit()
 	c.JSON(http.StatusCreated, utils.FilterItemsForRole(inputs, utils.GetUserRole(c)))
 }
 

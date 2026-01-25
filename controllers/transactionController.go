@@ -7,6 +7,7 @@ import (
 
 	"kd-api/config"
 	"kd-api/models"
+	"kd-api/utils"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -143,6 +144,21 @@ func CreateTransaction(c *gin.Context) {
 			return err
 		}
 
+		// ✅ AUDIT CREATE
+		description := fmt.Sprintf("Transaction #%d created", transaction.ID)
+		if err := utils.CreateTransactionAuditLog(
+			tx,
+			"create",
+			transaction.ID,
+			nil,
+			&transaction,
+			utils.GetUserID(c),
+			c.ClientIP(),
+			description,
+		); err != nil {
+			return err
+		}
+
 		warnings = localWarnings
 		return nil
 	})
@@ -173,6 +189,8 @@ func UpdateTransactionStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
 		return
 	}
+
+	oldCopy := transaction
 
 	var input struct {
 		Status          string   `json:"status"`
@@ -226,6 +244,22 @@ func UpdateTransactionStatus(c *gin.Context) {
 		return
 	}
 
+	// ✅ AUDIT UPDATE
+	description := fmt.Sprintf("Transaction #%d updated", transaction.ID)
+	if err := utils.CreateTransactionAuditLog(
+		config.DB,
+		"update",
+		transaction.ID,
+		&oldCopy,
+		&transaction,
+		utils.GetUserID(c),
+		c.ClientIP(),
+		description,
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
+		return
+	}
+
 	c.JSON(http.StatusOK, transaction)
 }
 
@@ -260,10 +294,25 @@ func DeleteTransaction(c *gin.Context) {
 		return
 	}
 
+	txCopy := transaction
+
 	if err := config.DB.Delete(&transaction).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete"})
 		return
 	}
+
+	// ✅ AUDIT DELETE
+	description := fmt.Sprintf("Transaction #%d deleted", txCopy.ID)
+	_ = utils.CreateTransactionAuditLog(
+		config.DB,
+		"delete",
+		txCopy.ID,
+		&txCopy,
+		nil,
+		utils.GetUserID(c),
+		c.ClientIP(),
+		description,
+	)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Draft deleted"})
 }

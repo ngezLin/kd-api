@@ -41,10 +41,12 @@ func GetAuditLogs(c *gin.Context) {
 
 	offset := (page - 1) * pageSize
 	if err := query.
+		Preload("User").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(pageSize).
 		Find(&logs).Error; err != nil {
+
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
