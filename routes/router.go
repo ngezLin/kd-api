@@ -76,4 +76,12 @@ func RegisterRoutes(r *gin.Engine) {
 	{
 		audit.GET("/", controllers.GetAuditLogs)
 	}
+
+	cash := r.Group("/cash-sessions")
+	cash.Use(middlewares.AuthMiddleware())
+	{
+		cash.GET("/current", controllers.GetCurrentCashSession)
+		cash.POST("/open", controllers.OpenCashSession)
+		cash.POST("/close", controllers.CloseCashSession)
+	}
 }

@@ -10,11 +10,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Get all transactions with pagination
+// Get all transactions
 func GetTransactions(c *gin.Context) {
     pageStr := c.DefaultQuery("page", "1")
     limitStr := c.DefaultQuery("limit", "10")
-    filterDate := c.Query("date") // <--- AMBIL TANGGAL
+    filterDate := c.Query("date")
 
     page, _ := strconv.Atoi(pageStr)
     limit, _ := strconv.Atoi(limitStr)
