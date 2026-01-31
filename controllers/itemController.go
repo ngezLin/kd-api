@@ -10,50 +10,53 @@ import (
 
 	"kd-api/config"
 	"kd-api/models"
-	"kd-api/utils"
+	"kd-api/utils/common"
+	"kd-api/utils/log"
+	"kd-api/utils/pagination"
+	"kd-api/utils/response"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-type PaginatedResponse struct {
-	Data       interface{} `json:"data"`
-	Page       int         `json:"page"`
-	PageSize   int         `json:"page_size"`
-	TotalItems int64       `json:"total_items"`
-	TotalPages int         `json:"total_pages"`
+func formatItemCSVRow(item models.Item, role string) []string {
+	desc := common.GetStringValue(item.Description)
+	img := common.GetStringValue(item.ImageURL)
+
+	if role == "cashier" {
+		return []string{
+			fmt.Sprintf("%d", item.ID),
+			item.Name,
+			desc,
+			fmt.Sprintf("%d", item.Stock),
+			fmt.Sprintf("%.2f", item.Price),
+			img,
+		}
+	}
+
+	return []string{
+		fmt.Sprintf("%d", item.ID),
+		item.Name,
+		desc,
+		fmt.Sprintf("%d", item.Stock),
+		fmt.Sprintf("%.2f", item.BuyPrice),
+		fmt.Sprintf("%.2f", item.Price),
+		img,
+	}
 }
 
-func getPaginationParams(c *gin.Context) (page, pageSize int) {
-	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "10"))
-
-	if page < 1 {
-		page = 1
+func getCSVHeaders(role string) []string {
+	if role == "cashier" {
+		return []string{"id", "name", "description", "stock", "price", "image_url"}
 	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 10
-	}
-	return
-}
-
-func buildPaginatedResponse(items []models.Item, page, pageSize int, total int64, role string) PaginatedResponse {
-	totalPages := int(total) / pageSize
-	if int(total)%pageSize != 0 {
-		totalPages++
-	}
-
-	return PaginatedResponse{
-		Data:       utils.FilterItemsForRole(items, role),
-		Page:       page,
-		PageSize:   pageSize,
-		TotalItems: total,
-		TotalPages: totalPages,
-	}
+	return []string{"id", "name", "description", "stock", "buy_price", "price", "image_url"}
 }
 
 func GetItems(c *gin.Context) {
-	page, pageSize := getPaginationParams(c)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	p := pagination.New(page, pageSize)
 
 	var items []models.Item
 	var total int64
@@ -63,14 +66,22 @@ func GetItems(c *gin.Context) {
 		return
 	}
 
-	offset := (page - 1) * pageSize
-	if err := config.DB.Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+	if err := config.DB.
+		Offset(p.Offset).
+		Limit(p.PageSize).
+		Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, buildPaginatedResponse(items, page, pageSize, total, utils.GetUserRole(c)))
+	meta := pagination.BuildMeta(p.Page, p.PageSize, total)
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": response.FilterItemsForRole(items, common.GetUserRole(c)),
+		"meta": meta,
+	})
 }
+
 
 func GetItemsByName(c *gin.Context) {
 	name := c.Query("name")
@@ -79,7 +90,10 @@ func GetItemsByName(c *gin.Context) {
 		return
 	}
 
-	page, pageSize := getPaginationParams(c)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	p := pagination.New(page, pageSize)
 
 	var items []models.Item
 	var total int64
@@ -94,14 +108,22 @@ func GetItemsByName(c *gin.Context) {
 		return
 	}
 
-	offset := (page - 1) * pageSize
-	if err := query.Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+	if err := query.
+		Offset(p.Offset).
+		Limit(p.PageSize).
+		Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, buildPaginatedResponse(items, page, pageSize, total, utils.GetUserRole(c)))
+	meta := pagination.BuildMeta(p.Page, p.PageSize, total)
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": response.FilterItemsForRole(items, common.GetUserRole(c)),
+		"meta": meta,
+	})
 }
+
 
 func GetItemByID(c *gin.Context) {
 	var item models.Item
@@ -109,7 +131,7 @@ func GetItemByID(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
 		return
 	}
-	c.JSON(http.StatusOK, utils.FilterItemForRole(item, utils.GetUserRole(c)))
+	c.JSON(http.StatusOK, response.FilterItemForRole(item, common.GetUserRole(c)))
 }
 
 func CreateItem(c *gin.Context) {
@@ -131,13 +153,13 @@ func CreateItem(c *gin.Context) {
 		}
 
 		description := fmt.Sprintf("Item '%s' created", input.Name)
-		return utils.CreateItemAuditLog(
+		return log.CreateItemAuditLog(
 			tx,
 			"create",
 			input.ID,
 			nil,
 			&input,
-			utils.GetUserID(c),
+			common.GetUserID(c),
 			c.ClientIP(),
 			description,
 		)
@@ -148,7 +170,7 @@ func CreateItem(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, utils.FilterItemForRole(input, utils.GetUserRole(c)))
+	c.JSON(http.StatusCreated, response.FilterItemForRole(input, common.GetUserRole(c)))
 }
 
 func UpdateItem(c *gin.Context) {
@@ -186,13 +208,13 @@ func UpdateItem(c *gin.Context) {
 		}
 
 		description := fmt.Sprintf("Item '%s' updated", oldItem.Name)
-		return utils.CreateItemAuditLog(
+		return log.CreateItemAuditLog(
 			tx,
 			"update",
 			oldItem.ID,
 			&oldCopy,
 			&oldItem,
-			utils.GetUserID(c),
+			common.GetUserID(c),
 			c.ClientIP(),
 			description,
 		)
@@ -203,7 +225,7 @@ func UpdateItem(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, utils.FilterItemForRole(oldItem, utils.GetUserRole(c)))
+	c.JSON(http.StatusOK, response.FilterItemForRole(oldItem, common.GetUserRole(c)))
 }
 
 func DeleteItem(c *gin.Context) {
@@ -221,13 +243,13 @@ func DeleteItem(c *gin.Context) {
 		}
 
 		description := fmt.Sprintf("Item '%s' deleted", itemCopy.Name)
-		return utils.CreateItemAuditLog(
+		return log.CreateItemAuditLog(
 			tx,
 			"delete",
 			itemCopy.ID,
 			&itemCopy,
 			nil,
-			utils.GetUserID(c),
+			common.GetUserID(c),
 			c.ClientIP(),
 			description,
 		)
@@ -257,7 +279,7 @@ func BulkCreateItems(c *gin.Context) {
 		}
 	}
 
-	userID := utils.GetUserID(c)
+	userID := common.GetUserID(c)
 	ipAddress := c.ClientIP()
 
 	err := config.DB.Transaction(func(tx *gorm.DB) error {
@@ -267,7 +289,7 @@ func BulkCreateItems(c *gin.Context) {
 
 		for _, item := range inputs {
 			description := fmt.Sprintf("Item '%s' created via bulk import", item.Name)
-			if err := utils.CreateItemAuditLog(
+			if err := log.CreateItemAuditLog(
 				tx,
 				"create",
 				item.ID,
@@ -288,7 +310,7 @@ func BulkCreateItems(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, utils.FilterItemsForRole(inputs, utils.GetUserRole(c)))
+	c.JSON(http.StatusCreated, response.FilterItemsForRole(inputs, common.GetUserRole(c)))
 }
 
 func ExportItems(c *gin.Context) {
@@ -298,13 +320,13 @@ func ExportItems(c *gin.Context) {
 		return
 	}
 
-	role := utils.GetUserRole(c)
+	role := common.GetUserRole(c)
 	var buffer bytes.Buffer
 	writer := csv.NewWriter(&buffer)
 
-	writer.Write(utils.GetCSVHeaders(role))
+	writer.Write(getCSVHeaders(role))
 	for _, item := range items {
-		writer.Write(utils.FormatItemCSVRow(item, role))
+		writer.Write(formatItemCSVRow(item, role))
 	}
 	writer.Flush()
 
