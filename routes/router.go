@@ -81,6 +81,7 @@ func RegisterRoutes(r *gin.Engine) {
 	cash.Use(middlewares.AuthMiddleware())
 	{
 		cash.GET("/current", controllers.GetCurrentCashSession)
+		cash.GET("/history", controllers.GetCashSessionHistory)
 		cash.POST("/open", controllers.OpenCashSession)
 		cash.POST("/close", controllers.CloseCashSession)
 	}

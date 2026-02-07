@@ -59,12 +59,12 @@ func CreateTransaction(c *gin.Context) {
 				return fmt.Errorf("item %d not found", i.ItemID)
 			}
 
-			if i.Quantity <= 0 {
+			if i.Quantity == 0 {
 				return fmt.Errorf("invalid quantity for item %d", i.ItemID)
 			}
 
 			price := item.Price
-			if i.CustomPrice != nil && *i.CustomPrice >= 0 {
+			if i.CustomPrice != nil {
 				price = *i.CustomPrice
 			}
 

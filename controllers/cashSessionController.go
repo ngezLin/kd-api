@@ -2,37 +2,16 @@ package controllers
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"kd-api/config"
 	"kd-api/models"
+	"kd-api/utils/common"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
-
-/* =========================
-   HELPER: ambil user_id aman
-   ========================= */
-func getUserID(c *gin.Context) (uint, bool) {
-	userIDAny, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "unauthorized",
-		})
-		return 0, false
-	}
-
-	userID, ok := userIDAny.(uint)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "invalid user id",
-		})
-		return 0, false
-	}
-
-	return userID, true
-}
 
 /* =========================
    OPEN CASH SESSION
@@ -40,10 +19,12 @@ func getUserID(c *gin.Context) (uint, bool) {
 func OpenCashSession(c *gin.Context) {
 	db := config.DB
 
-	userID, ok := getUserID(c)
-	if !ok {
+	userIDPtr := common.GetUserID(c)
+	if userIDPtr == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
+	userID := *userIDPtr
 
 	var input struct {
 		OpeningCash float64 `json:"opening_cash" binding:"required"`
@@ -91,10 +72,12 @@ func OpenCashSession(c *gin.Context) {
 func GetCurrentCashSession(c *gin.Context) {
 	db := config.DB
 
-	userID, ok := getUserID(c)
-	if !ok {
+	userIDPtr := common.GetUserID(c)
+	if userIDPtr == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
+	userID := *userIDPtr
 
 	var session models.CashSession
 	if err := db.Where("user_id = ? AND status = 'open'", userID).
@@ -120,10 +103,12 @@ func GetCurrentCashSession(c *gin.Context) {
 func CloseCashSession(c *gin.Context) {
 	db := config.DB
 
-	userID, ok := getUserID(c)
-	if !ok {
+	userIDPtr := common.GetUserID(c)
+	if userIDPtr == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
+	userID := *userIDPtr
 
 	var input struct {
 		ClosingCash float64 `json:"closing_cash" binding:"required"`
@@ -185,4 +170,67 @@ func CloseCashSession(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, session)
+}
+
+/* =========================
+   GET CASH SESSION HISTORY
+   ========================= */
+func GetCashSessionHistory(c *gin.Context) {
+	db := config.DB
+
+	userIDPtr := common.GetUserID(c)
+	if userIDPtr == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	userID := *userIDPtr
+
+	// Parameters
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	if pageSize < 1 {
+		pageSize = 10
+	}
+
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+
+	offset := (page - 1) * pageSize
+
+	var sessions []models.CashSession
+	var total int64
+
+	query := db.Model(&models.CashSession{}).Where("user_id = ?", userID)
+
+	if startDate != "" {
+		query = query.Where("opened_at >= ?", startDate+" 00:00:00")
+	}
+
+	if endDate != "" {
+		query = query.Where("opened_at <= ?", endDate+" 23:59:59")
+	}
+
+	query.Count(&total)
+
+	err := query.Order("opened_at desc").
+		Limit(pageSize).
+		Offset(offset).
+		Find(&sessions).Error
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data":       sessions,
+		"total":      total,
+		"page":       page,
+		"page_size":  pageSize,
+		"total_pages": int(float64(total)/float64(pageSize) + 0.99),
+	})
 }
