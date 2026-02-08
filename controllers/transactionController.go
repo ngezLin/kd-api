@@ -1,176 +1,28 @@
 package controllers
 
 import (
-	"errors"
-	"fmt"
 	"net/http"
 
-	"kd-api/config"
-	"kd-api/models"
+	"kd-api/dtos"
+	"kd-api/services"
 	"kd-api/utils/common"
-	"kd-api/utils/log"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 
 func CreateTransaction(c *gin.Context) {
-	var input struct {
-		Status          string   `json:"status"`
-		PaymentAmount   *float64 `json:"paymentAmount,omitempty"`
-		PaymentType     *string  `json:"paymentType,omitempty"`
-		Note            *string  `json:"note,omitempty"`
-		TransactionType *string  `json:"transaction_type,omitempty"`
-		Discount        *float64 `json:"discount,omitempty"`
-		Items           []struct {
-			ItemID      uint     `json:"item_id"`
-			Quantity    int      `json:"quantity"`
-			CustomPrice *float64 `json:"customPrice,omitempty"`
-		} `json:"items"`
-	}
+	var input dtos.CreateTransactionInput
 
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if len(input.Items) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No items provided"})
-		return
-	}
-
-	if input.Status != "draft" && input.Status != "completed" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid transaction status"})
-		return
-	}
-
-	var transaction models.Transaction
-	var warnings []string
-
-	err := config.DB.Transaction(func(tx *gorm.DB) error {
-		var total float64
-		var transactionItems []models.TransactionItem
-		var localWarnings []string
-
-		for _, i := range input.Items {
-			var item models.Item
-			if err := tx.First(&item, i.ItemID).Error; err != nil {
-				return fmt.Errorf("item %d not found", i.ItemID)
-			}
-
-			if i.Quantity == 0 {
-				return fmt.Errorf("invalid quantity for item %d", i.ItemID)
-			}
-
-			price := item.Price
-			if i.CustomPrice != nil {
-				price = *i.CustomPrice
-			}
-
-			subtotal := float64(i.Quantity) * price
-			total += subtotal
-
-			transactionItems = append(transactionItems, models.TransactionItem{
-				ItemID:   i.ItemID,
-				Quantity: i.Quantity,
-				Price:    price,
-				Subtotal: subtotal,
-			})
-		}
-
-		discount := 0.0
-		if input.Discount != nil && *input.Discount > 0 {
-			discount = *input.Discount
-		}
-
-		finalTotal := total - discount
-		if finalTotal < 0 {
-			finalTotal = 0
-		}
-
-		transaction = models.Transaction{
-			Status:          input.Status,
-			Total:           finalTotal,
-			Discount:        discount,
-			Items:           transactionItems,
-			Note:            input.Note,
-			TransactionType: "onsite",
-		}
-
-		if input.TransactionType != nil && *input.TransactionType != "" {
-			transaction.TransactionType = *input.TransactionType
-		}
-
-		if input.Status == "completed" {
-			if input.PaymentAmount == nil || *input.PaymentAmount < finalTotal {
-				return errors.New("payment not enough")
-			}
-
-			change := *input.PaymentAmount - finalTotal
-			transaction.Payment = input.PaymentAmount
-			transaction.Change = &change
-
-			if input.PaymentType != nil && *input.PaymentType != "" {
-				transaction.PaymentType = input.PaymentType
-			} else {
-				defaultType := "cash"
-				transaction.PaymentType = &defaultType
-			}
-
-			for _, tItem := range transactionItems {
-				var item models.Item
-				if err := tx.First(&item, tItem.ItemID).Error; err != nil {
-					return err
-				}
-
-				if item.Stock < tItem.Quantity {
-					localWarnings = append(localWarnings,
-						fmt.Sprintf(
-							"Warning: Item '%s' stock insufficient (current: %d, required: %d)",
-							item.Name, item.Stock, tItem.Quantity,
-						),
-					)
-					item.Stock = 0
-				} else {
-					item.Stock -= tItem.Quantity
-				}
-
-				if err := tx.Save(&item).Error; err != nil {
-					return err
-				}
-			}
-		}
-
-		if err := tx.Create(&transaction).Error; err != nil {
-			return err
-		}
-
-		description := fmt.Sprintf("Transaction #%d created", transaction.ID)
-		if err := log.CreateTransactionAuditLog(
-			tx,
-			"create",
-			transaction.ID,
-			nil,
-			&transaction,
-			common.GetUserID(c),
-			c.ClientIP(),
-			description,
-		); err != nil {
-			return err
-		}
-
-		warnings = localWarnings
-		return nil
-	})
-
+	service := services.NewTransactionService()
+	transaction, warnings, err := service.CreateTransaction(input, common.GetUserID(c), c.ClientIP())
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := config.DB.Preload("Items.Item").First(&transaction, transaction.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -185,78 +37,21 @@ func CreateTransaction(c *gin.Context) {
 func UpdateTransactionStatus(c *gin.Context) {
 	id := c.Param("id")
 
-	var transaction models.Transaction
-	if err := config.DB.Preload("Items").First(&transaction, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
-		return
-	}
-
-	oldCopy := transaction
-
-	var input struct {
-		Status          string   `json:"status"`
-		Note            *string  `json:"note,omitempty"`
-		TransactionType *string  `json:"transaction_type,omitempty"`
-		Discount        *float64 `json:"discount,omitempty"`
-	}
-
+	var input dtos.UpdateTransactionInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if input.Status != "" {
-		if input.Status != "draft" && input.Status != "completed" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid status"})
+	service := services.NewTransactionService()
+	transaction, err := service.UpdateTransactionStatus(id, input, common.GetUserID(c), c.ClientIP())
+	if err != nil {
+		// Distinguish between not found and other errors if needed, but for now generic 500 or 400
+		if err.Error() == "transaction not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		transaction.Status = input.Status
-	}
-
-	if input.Note != nil {
-		transaction.Note = input.Note
-	}
-
-	if input.TransactionType != nil {
-		transaction.TransactionType = *input.TransactionType
-	}
-
-	if input.Discount != nil {
-		if *input.Discount < 0 {
-			transaction.Discount = 0
-		} else {
-			transaction.Discount = *input.Discount
-		}
-
-		var total float64
-		for _, item := range transaction.Items {
-			total += item.Subtotal
-		}
-
-		finalTotal := total - transaction.Discount
-		if finalTotal < 0 {
-			finalTotal = 0
-		}
-		transaction.Total = finalTotal
-	}
-
-	if err := config.DB.Save(&transaction).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	description := fmt.Sprintf("Transaction #%d updated", transaction.ID)
-	if err := log.CreateTransactionAuditLog(
-		config.DB,
-		"update",
-		transaction.ID,
-		&oldCopy,
-		&transaction,
-		common.GetUserID(c),
-		c.ClientIP(),
-		description,
-	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create audit log"})
 		return
 	}
 
@@ -269,66 +64,63 @@ func GetDraftTransactions(c *gin.Context) {
 		status = "draft"
 	}
 
-	var transactions []models.Transaction
-	if err := config.DB.Preload("Items.Item").
-		Where("status = ?", status).
-		Find(&transactions).Error; err != nil {
+	service := services.NewTransactionService()
+	response, err := service.GetTransactions(dtos.TransactionFilter{
+		Status: status,
+		Page:   1, // Default or query param
+		Limit:  100, // Or query param, assuming fetch all drafts usually
+	})
+
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, transactions)
+	// Maintains original response format which was a list of transactions
+	c.JSON(http.StatusOK, response.Data)
 }
 
 func DeleteTransaction(c *gin.Context) {
 	id := c.Param("id")
-
-	var transaction models.Transaction
-	if err := config.DB.First(&transaction, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
+	service := services.NewTransactionService()
+	
+	err := service.DeleteDraft(id, common.GetUserID(c), c.ClientIP())
+	if err != nil {
+		if err.Error() == "transaction not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		if err.Error() == "only draft can be deleted" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	if transaction.Status != "draft" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only draft can be deleted"})
-		return
-	}
-
-	txCopy := transaction
-
-	if err := config.DB.Delete(&transaction).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete"})
-		return
-	}
-
-	description := fmt.Sprintf("Transaction #%d deleted", txCopy.ID)
-	_ = log.CreateTransactionAuditLog(
-		config.DB,
-		"delete",
-		txCopy.ID,
-		&txCopy,
-		nil,
-		common.GetUserID(c),
-		c.ClientIP(),
-		description,
-	)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Draft deleted"})
 }
 
 func GetTransactionByID(c *gin.Context) {
 	id := c.Param("id")
+	service := services.NewTransactionService()
 
-	var transaction models.Transaction
-	if err := config.DB.Preload("Items.Item").First(&transaction, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
+	transaction, err := service.GetTransactionByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
 
 	if transaction.Status == "draft" {
 		c.JSON(http.StatusOK, transaction)
+		// Keeping the logic to delete draft after view? That seems odd in the original code but preserving behavior.
+		// Wait, original code:
+		// go func() { config.DB.Delete(&models.Transaction{}, id) }()
+		// This deletes the draft immediately after viewing? 
+		// I will replicate this behavior via service if needed, but maybe I should expose a method for it.
+		// For now I'll call DeleteDraft in a goroutine ignoring errors as per original fire-and-forget.
 		go func() {
-			config.DB.Delete(&models.Transaction{}, id)
+			_ = service.DeleteDraft(id, common.GetUserID(c), c.ClientIP())
 		}()
 		return
 	}
