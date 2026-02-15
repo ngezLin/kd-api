@@ -107,7 +107,7 @@ func (s *itemService) CreateItem(input dtos.CreateItemInput, userID *uint, clien
 		}
 
 		description := fmt.Sprintf("Item '%s' created", item.Name)
-		return log.CreateItemAuditLog(
+		if err := log.CreateItemAuditLog(
 			tx,
 			"create",
 			item.ID,
@@ -116,7 +116,19 @@ func (s *itemService) CreateItem(input dtos.CreateItemInput, userID *uint, clien
 			userID,
 			clientIP,
 			description,
-		)
+		); err != nil {
+			return err
+		}
+
+		// Inventory Log (Initial Stock)
+		if item.Stock > 0 {
+			invService := NewInventoryService()
+			if err := invService.LogStockChange(tx, item.ID, item.Stock, "restock", "INITIAL", userID, "Initial stock"); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	})
 
 	if err != nil {
@@ -153,7 +165,7 @@ func (s *itemService) UpdateItem(id string, input dtos.UpdateItemInput, userID *
 		}
 
 		description := fmt.Sprintf("Item '%s' updated", oldItem.Name)
-		return log.CreateItemAuditLog(
+		if err := log.CreateItemAuditLog(
 			tx,
 			"update",
 			oldItem.ID,
@@ -162,7 +174,20 @@ func (s *itemService) UpdateItem(id string, input dtos.UpdateItemInput, userID *
 			userID,
 			clientIP,
 			description,
-		)
+		); err != nil {
+			return err
+		}
+
+		// Inventory Log (Stock Adjustment)
+		stockChange := oldItem.Stock - oldCopy.Stock
+		if stockChange != 0 {
+			invService := NewInventoryService()
+			if err := invService.LogStockChange(tx, oldItem.ID, stockChange, "adjustment", "MANUAL", userID, "Manual stock update"); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	})
 
 	if err != nil {
@@ -229,6 +254,14 @@ func (s *itemService) BulkCreateItems(inputs dtos.BulkCreateItemInput, userID *u
 				description,
 			); err != nil {
 				return err
+			}
+
+			// Inventory Log
+			if item.Stock > 0 {
+				invService := NewInventoryService()
+				if err := invService.LogStockChange(tx, item.ID, item.Stock, "restock", "BULK_IMPORT", userID, "Bulk import initial stock"); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

@@ -16,6 +16,13 @@ func RegisterRoutes(r *gin.Engine) {
 	r.GET("/public/items/search", controllers.GetItemsByName)
 	r.GET("/public/items/:id", controllers.GetItemByID)
 
+	// Inventory
+	inventory := r.Group("/inventory")
+	inventory.Use(middlewares.AuthMiddleware())
+	{
+		inventory.GET("/history", controllers.GetInventoryHistory)
+	}
+
 	// Items 
 	items := r.Group("/items")
 	items.Use(middlewares.AuthMiddleware())

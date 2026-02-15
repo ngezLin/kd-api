@@ -20,7 +20,7 @@ type TransactionService interface {
 	GetTransactionHistory(filter dtos.TransactionFilter) (*dtos.TransactionListResponse, error)
 	GetTransactionByID(id string) (*models.Transaction, error)
 	DeleteDraft(id string, userID *uint, clientIP string) error
-	RefundTransaction(id string) (*models.Transaction, error)
+	RefundTransaction(id string, userID *uint, clientIP string) (*models.Transaction, error)
 }
 
 type transactionService struct{}
@@ -137,6 +137,22 @@ func (s *transactionService) CreateTransaction(input dtos.CreateTransactionInput
 
 		if err := tx.Create(&transaction).Error; err != nil {
 			return err
+		}
+
+		// Inventory Ledger: Log Sales
+		if input.Status == "completed" {
+			invService := NewInventoryService()
+			for _, tItem := range transactionItems {
+				// We need the ID, but we already have item.Stock updated.
+				// Change is negative.
+				change := -tItem.Quantity
+				ref := fmt.Sprintf("TX-%d", transaction.ID)
+				note := "Sold in transaction"
+				
+				if err := invService.LogStockChange(tx, tItem.ItemID, change, "sale", ref, userID, note); err != nil {
+					return err
+				}
+			}
 		}
 
 		description := fmt.Sprintf("Transaction #%d created", transaction.ID)
@@ -364,7 +380,7 @@ func (s *transactionService) DeleteDraft(id string, userID *uint, clientIP strin
 	return nil
 }
 
-func (s *transactionService) RefundTransaction(id string) (*models.Transaction, error) {
+func (s *transactionService) RefundTransaction(id string, userID *uint, clientIP string) (*models.Transaction, error) {
 	var transaction models.Transaction
 	if err := config.DB.Preload("Items.Item").First(&transaction, id).Error; err != nil {
 		return nil, errors.New("transaction not found")
@@ -379,6 +395,14 @@ func (s *transactionService) RefundTransaction(id string) (*models.Transaction, 
 		if err := config.DB.First(&item, tItem.ItemID).Error; err == nil {
 			item.Stock += tItem.Quantity
 			config.DB.Save(&item)
+
+			// Inventory Log (Refund)
+			invService := NewInventoryService()
+			change := tItem.Quantity // Refund is positive (stock returns)
+			ref := fmt.Sprintf("TX-%d (REFUND)", transaction.ID)
+			note := "Refunded transaction"
+
+			invService.LogStockChange(config.DB, tItem.ItemID, change, "refund", ref, userID, note)
 		}
 	}
 

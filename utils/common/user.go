@@ -15,7 +15,7 @@ func GetUserRole(c *gin.Context) string {
 }
 
 func GetUserID(c *gin.Context) *uint {
-	keys := []string{"user_id", "userID", "id", "uid", "userId"}
+	keys := []string{"user_id", "userID", "id", "uid", "userId"} // hardcoded
 	
 	for _, key := range keys {
 		if value, exists := c.Get(key); exists {

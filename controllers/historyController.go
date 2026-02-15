@@ -3,6 +3,7 @@ package controllers
 import (
 	"kd-api/dtos"
 	"kd-api/services"
+	"kd-api/utils/common"
 	"net/http"
 	"strconv"
 
@@ -55,7 +56,7 @@ func RefundTransaction(c *gin.Context) {
 	id := c.Param("id")
     service := services.NewTransactionService()
     
-    transaction, err := service.RefundTransaction(id)
+    transaction, err := service.RefundTransaction(id, common.GetUserID(c), c.ClientIP())
     if err != nil {
         if err.Error() == "transaction not found" {
             c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
